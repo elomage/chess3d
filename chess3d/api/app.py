@@ -115,7 +115,7 @@ def create_app(service: GameService | None = None, engine: EnginePlayer | None =
         return await call(svc.move(m, origin="voice"))
 
     @app.post("/game/engine")
-    async def engine(body: EngineIn):
+    async def engine_on(body: EngineIn):
         if body.side not in ("white", "black"):
             raise HTTPException(status_code=422, detail="side must be white or black")
         player = EnginePlayer(body.path, white=body.side == "white", movetime=body.movetime)

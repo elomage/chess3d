@@ -145,3 +145,36 @@ def test_api_and_websocket():
         assert client.post("/reset").status_code == 200
         assert client.get("/").status_code == 200
         json.dumps(client.get("/state").json())
+
+
+def test_startup_without_engine_leaves_engine_unset():
+    svc = service()
+    with TestClient(create_app(svc)):
+        pass
+    assert svc.engine is None
+
+
+def test_real_server_websocket():
+    import threading
+    import time
+
+    import uvicorn
+    import websockets
+
+    server = uvicorn.Server(uvicorn.Config(create_app(service()), port=8799, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+
+        async def receive():
+            async with websockets.connect("ws://127.0.0.1:8799/ws") as ws:
+                return json.loads(await ws.recv())["type"]
+
+        assert run(receive()) == "state"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
