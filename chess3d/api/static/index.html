@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chess3d viewer</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #ffffff; --ink: #222; --muted: #777;
+    --light: #e9d8b4; --dark: #a87b52; --border: #6b4a2e; --park: #d9d4c7;
+    --white-piece: #fbfaf6; --black-piece: #2a2623; --accent: #2f7de1; --error: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1a18; --panel: #262422; --ink: #eee; --muted: #999; --park: #34312c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; }
+  #view { flex: 1 1 640px; min-width: 0; }
+  canvas { width: 100%; height: auto; display: block; background: var(--park); border-radius: 6px; cursor: pointer; }
+  aside { flex: 0 1 320px; display: flex; flex-direction: column; gap: 12px; }
+  section { background: var(--panel); border-radius: 6px; padding: 12px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
+  input, select, button { font: inherit; padding: 6px 8px; border-radius: 4px; border: 1px solid #8884; background: var(--bg); color: var(--ink); }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row input { flex: 1; min-width: 0; }
+  #status { min-height: 1.4em; }
+  #status.error { color: var(--error); }
+  #history { font-family: ui-monospace, monospace; max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <div id="view"><canvas id="board" width="1350" height="900"></canvas></div>
+  <aside>
+    <section>
+      <h2>Game</h2>
+      <div id="turn"></div>
+      <div id="status"></div>
+    </section>
+    <section>
+      <h2>Move</h2>
+      <div class="row">
+        <input id="move" placeholder="e4, Nf3, e2e4 or 'knight to f3'">
+        <button class="primary" id="send">Play</button>
+      </div>
+      <p style="color:var(--muted);margin:8px 0 0">Or click a piece, then its target square.</p>
+    </section>
+    <section>
+      <h2>Board</h2>
+      <div class="row">
+        <button id="new">New game</button>
+        <button id="reset">Reset pieces</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="fen" placeholder="FEN to set up">
+        <button id="setup">Set up</button>
+      </div>
+    </section>
+    <section>
+      <h2>Engine</h2>
+      <div class="row">
+        <input id="engine-path" value="stockfish">
+        <select id="engine-side"><option>black</option><option>white</option></select>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="engine-on">Play engine</button>
+        <button id="engine-off">Stop</button>
+      </div>
+    </section>
+    <section>
+      <h2>History</h2>
+      <div id="history"></div>
+    </section>
+  </aside>
+</main>
+<script>
+const W = 4.5, H = 3.0, SQ = 3.0 / 9, BORDER = SQ / 2;
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const scale = canvas.width / W;
+let state = null, anim = null, selected = null;
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const px = (x, y) => [x * scale, (H - y) * scale];
+
+function setStatus(text, error = false) {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = error ? "error" : "";
+}
+
+async function api(path, body, method = "POST") {
+  const res = await fetch(path, {
+    method, headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+async function run(label, promise) {
+  setStatus(label + "...");
+  try {
+    const r = await promise;
+    const secs = r && r.seconds !== undefined ? ` (${r.seconds.toFixed(1)}s)` : "";
+    setStatus(label + " done" + secs);
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+}
+
+function drawBoard() {
+  ctx.fillStyle = css("--park");
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = css("--border");
+  ctx.fillRect(0, 0, 3.0 * scale, H * scale);
+  for (let f = 0; f < 8; f++) for (let r = 0; r < 8; r++) {
+    ctx.fillStyle = (f + r) % 2 ? css("--light") : css("--dark");
+    const [x, y] = px(BORDER + f * SQ, BORDER + (r + 1) * SQ);
+    ctx.fillRect(x, y, SQ * scale, SQ * scale);
+  }
+  ctx.fillStyle = css("--muted");
+  ctx.font = `${0.06 * scale}px system-ui`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (let f = 0; f < 8; f++) {
+    const [x, y] = px(BORDER + (f + 0.5) * SQ, BORDER / 2);
+    ctx.fillText("abcdefgh"[f], x, y);
+  }
+  for (let r = 0; r < 8; r++) {
+    const [x, y] = px(BORDER / 2, BORDER + (r + 0.5) * SQ);
+    ctx.fillText(r + 1, x, y);
+  }
+  ctx.strokeStyle = css("--muted");
+  ctx.setLineDash([6, 6]);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 8; r++) {
+    const [x, y] = px(3.0 + SQ / 2 + c * SQ, (r + 1) * SQ);
+    ctx.beginPath(); ctx.arc(x, y, 0.12 * scale, 0, 2 * Math.PI); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
+const GLYPH = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
+
+function drawPiece(p, x, y) {
+  const [cx, cy] = px(x, y);
+  ctx.beginPath();
+  ctx.arc(cx, cy, p.radius * scale, 0, 2 * Math.PI);
+  ctx.fillStyle = p.white ? css("--white-piece") : css("--black-piece");
+  ctx.fill();
+  ctx.lineWidth = selected === p.id ? 5 : 1.5;
+  ctx.strokeStyle = selected === p.id ? css("--accent") : "#0008";
+  ctx.stroke();
+  ctx.fillStyle = p.white ? "#222" : "#f2efe8";
+  ctx.font = `${p.radius * 1.4 * scale}px serif`;
+  ctx.fillText(GLYPH[p.kind], cx, cy + p.radius * 0.08 * scale);
+}
+
+function positionAt(path, t) {
+  if (t <= path[0][2]) return path[0];
+  for (let k = 1; k < path.length; k++) {
+    const [x0, y0, t0] = path[k - 1], [x1, y1, t1] = path[k];
+    if (t <= t1) {
+      const f = t1 > t0 ? (t - t0) / (t1 - t0) : 1;
+      return [x0 + f * (x1 - x0), y0 + f * (y1 - y0)];
+    }
+  }
+  return path[path.length - 1];
+}
+
+function frame(now) {
+  drawBoard();
+  if (state) {
+    let t = null;
+    if (anim) {
+      t = ((now - anim.start) / 1000) * anim.timeScale;
+      if (t > anim.duration) t = anim.duration;
+    }
+    for (const p of state.pieces) {
+      let x = p.x, y = p.y;
+      if (anim && anim.paths[p.id]) [x, y] = positionAt(anim.paths[p.id], t);
+      drawPiece(p, x, y);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function render() {
+  document.getElementById("turn").textContent = state.game_over
+    ? `Game over: ${state.result}`
+    : `${state.turn} to move${state.synced ? "" : " (board detached: reset or new game)"}`
+      + (state.engine ? ` - engine plays ${state.engine.side}` : "");
+  const h = state.history;
+  let text = "";
+  for (let k = 0; k < h.length; k += 2) text += `${k / 2 + 1}. ${h[k]} ${h[k + 1] || ""}\n`;
+  const el = document.getElementById("history");
+  el.textContent = text;
+  el.scrollTop = el.scrollHeight;
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "state") {
+      state = msg; anim = null; render();
+    } else if (msg.type === "plan") {
+      anim = { paths: msg.paths, duration: msg.duration, timeScale: msg.time_scale, start: performance.now() };
+    }
+  };
+  ws.onclose = () => { setStatus("disconnected, retrying...", true); setTimeout(connect, 1000); };
+}
+
+function squareAt(x, y) {
+  const f = Math.floor((x - BORDER) / SQ), r = Math.floor((y - BORDER) / SQ);
+  return f >= 0 && f < 8 && r >= 0 && r < 8 ? "abcdefgh"[f] + (r + 1) : null;
+}
+
+canvas.addEventListener("click", ev => {
+  if (!state) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) / rect.width * W;
+  const y = H - (ev.clientY - rect.top) / rect.height * H;
+  const hit = state.pieces.find(p => Math.hypot(p.x - x, p.y - y) < p.radius);
+  const sq = squareAt(x, y);
+  if (selected && sq) {
+    const from = state.pieces.find(p => p.id === selected);
+    const fromSq = squareAt(from.x, from.y);
+    selected = null;
+    if (fromSq && fromSq !== sq) {
+      let uci = fromSq + sq;
+      if (from.kind === "P" && (sq[1] === "8" || sq[1] === "1")) uci += "q";
+      run(`move ${uci}`, api("/game/move", { move: uci }));
+      return;
+    }
+  }
+  selected = hit && !hit.parked ? hit.id : null;
+});
+
+function sendMove() {
+  const text = document.getElementById("move").value.trim();
+  if (!text) return;
+  const path = /\s/.test(text) ? "/game/voice" : "/game/move";
+  const body = path === "/game/voice" ? { text } : { move: text };
+  run(`move ${text}`, api(path, body));
+  document.getElementById("move").value = "";
+}
+
+document.getElementById("send").onclick = sendMove;
+document.getElementById("move").addEventListener("keydown", e => { if (e.key === "Enter") sendMove(); });
+document.getElementById("new").onclick = () => run("new game", api("/game/new", {}));
+document.getElementById("reset").onclick = () => run("reset", api("/reset"));
+document.getElementById("setup").onclick = () =>
+  run("set up", api("/game/new", { fen: document.getElementById("fen").value.trim() }));
+document.getElementById("engine-on").onclick = () => run("engine", api("/game/engine", {
+  path: document.getElementById("engine-path").value,
+  side: document.getElementById("engine-side").value,
+}));
+document.getElementById("engine-off").onclick = () => run("engine off", api("/game/engine", undefined, "DELETE"));
+
+connect();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

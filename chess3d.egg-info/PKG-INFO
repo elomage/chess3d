@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: chess3d
+Version: 0.1.0
+Summary: Orchestration software for a large robotic chess set
+Requires-Python: >=3.10
+License-File: LICENSE
+Requires-Dist: chess>=1.10
+Requires-Dist: numpy>=1.26
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn>=0.29
+Requires-Dist: httpx>=0.27
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Dynamic: license-file
