@@ -291,12 +291,25 @@ class Planner:
             d = np.hypot(p[..., 0] - lat.xy[n, 0], p[..., 1] - lat.xy[n, 1])
             return bool((d >= need[:, None]).all())
 
+        # Lexicographic A*: earliest arrival first, then shortest travelled
+        # length. Straight and zig-zag paths often take the same number of
+        # steps; the length term picks the straight one.
+        goal_xy = lat.xy[goal]
+
+        def to_go(m: int) -> float:
+            return float(np.hypot(*(lat.xy[m] - goal_xy))) / GRID
+
         tie = itertools.count()
-        heap = [(t0 + int(h[start]), int(h[start]), next(tie), start, t0)]
+        heap = [(t0 + int(h[start]), to_go(start), next(tie), 0.0, start, t0)]
         came: dict[tuple[int, int], tuple[int, int] | None] = {(start, t0): None}
+        best: dict[tuple[int, int], float] = {(start, t0): 0.0}
+        closed: set[tuple[int, int]] = set()
         expansions = 0
         while heap:
-            _, _, _, n, t = heapq.heappop(heap)
+            _, _, _, length, n, t = heapq.heappop(heap)
+            if (n, t) in closed or length > best[(n, t)]:
+                continue
+            closed.add((n, t))
             if n == goal and safe_forever(n, t):
                 path = []
                 key: tuple[int, int] | None = (n, t)
@@ -308,7 +321,7 @@ class Planner:
             if expansions > self.max_expansions or t >= H:
                 continue
             succ = [n] + [m for m in lat.neighbors[n] if free[m]]
-            succ = [m for m in succ if (m, t + 1) not in came and h[m] < np.iinfo(np.int32).max]
+            succ = [m for m in succ if (m, t + 1) not in closed and h[m] < np.iinfo(np.int32).max]
             if not succ:
                 continue
             s_xy = lat.xy[succ]
@@ -321,10 +334,16 @@ class Planner:
                 ok = ((d1 >= need[None]) & (dm >= need[None])).all(axis=1)
             else:
                 ok = np.ones(len(succ), dtype=bool)
-            for m, good in zip(succ, ok):
-                if good:
-                    came[(m, t + 1)] = (n, t)
-                    heapq.heappush(heap, (t + 1 + int(h[m]), int(h[m]), next(tie), m, t + 1))
+            steps = np.hypot(s_xy[:, 0] - lat.xy[n, 0], s_xy[:, 1] - lat.xy[n, 1]) / GRID
+            for m, good, step in zip(succ, ok, steps):
+                if not good:
+                    continue
+                key2 = (m, t + 1)
+                nl = length + float(step)
+                if nl < best.get(key2, float("inf")) - 1e-9:
+                    best[key2] = nl
+                    came[key2] = (n, t)
+                    heapq.heappush(heap, (t + 1 + int(h[m]), nl + to_go(m), next(tie), nl, m, t + 1))
         raise PlanningError(f"{agent}: no collision-free path to {lat.node(goal)}")
 
 

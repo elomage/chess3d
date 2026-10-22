@@ -137,3 +137,20 @@ def test_executor_moves_sim_movers(planner):
     pose = movers["wBc1"].pose()
     assert (pose.x, pose.y) == pytest.approx(tuple(lat.xy[lat.index(node_of(chess.E3))]))
     assert world.pieces["wBc1"].node == node_of(chess.E3)
+
+
+@pytest.mark.parametrize("piece, target", [("wPe2", chess.E4), ("wRa1", chess.A6)])
+def test_free_straight_moves_stay_straight(planner, piece, target):
+    world = World.initial()
+    world.pieces.pop("wPa2")  # open the a-file for the rook
+    plan = planner.plan(world, piece, node_of(target))
+    xs = {planner.lat.node(n)[0] for n in plan.trajectories[piece]}
+    assert len(xs) == 1, f"path wanders across files: {sorted(xs)}"
+
+
+def test_free_rank_move_stays_straight(planner):
+    world = World()
+    world.add(Piece("wRa1", Kind.ROOK, True, node_of(chess.A4)))
+    plan = planner.plan(world, "wRa1", node_of(chess.H4))
+    ys = {planner.lat.node(n)[1] for n in plan.trajectories["wRa1"]}
+    assert len(ys) == 1, f"path wanders across ranks: {sorted(ys)}"
