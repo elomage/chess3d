@@ -178,3 +178,4 @@ def test_real_server_websocket():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+    assert not thread.is_alive(), "server did not shut down after a WebSocket client left"

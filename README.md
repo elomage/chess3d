@@ -64,6 +64,17 @@ injected faults or against real ones:
 
 Firmware for the foot is in `firmware/mover` (see its README).
 
+## Option 2b: carriers under the board
+
+    .venv/bin/python -m chess3d.api --carriers 4                       # simulated carriers
+    .venv/bin/python tools/benchmark.py data/sample.pgn --carriers 6 --carrier-speed 0.8 --idle spread
+
+The planner caps simultaneous movers at the carrier count; the carrier
+scheduler then assigns a carrier to every stretch of piece motion and freezes
+the whole board when a carrier still has to arrive. Between moves idle
+carriers spread over the field (`--idle spread`). Carrier-carrier collisions
+in the cavity are not modelled yet.
+
 ## Benchmark and tests
 
     .venv/bin/python tools/benchmark.py data/sample.pgn --random 10 --verify

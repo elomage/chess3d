@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import chess
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -172,14 +172,26 @@ def create_app(service: GameService | None = None, engine: EnginePlayer | None =
     async def ws(socket: WebSocket):
         await socket.accept()
         q = svc.subscribe()
-        try:
+
+        async def forward():
             await socket.send_json(svc.snapshot())
             while True:
-                event = await q.get()
-                await socket.send_json(event)
-        except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
+                await socket.send_json(await q.get())
+
+        async def until_closed():
+            # Clients only listen; reading is how a disconnect is noticed
+            # while no events are flowing.
+            while True:
+                if (await socket.receive())["type"] == "websocket.disconnect":
+                    return
+
+        tasks = [asyncio.create_task(forward()), asyncio.create_task(until_closed())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             svc.unsubscribe(q)
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -80,6 +80,10 @@ class SimExecutor:
         self.time_scale = time_scale
         self.realtime = realtime
 
+    def prepare(self, plan: Plan) -> tuple[Plan, dict]:
+        """Last change to a plan before it runs, plus extra event fields."""
+        return plan, {}
+
     async def execute(self, plan: Plan, world: World) -> float:
         duration = plan.steps * self.dt
         if self.realtime and duration:
@@ -117,6 +121,33 @@ class SimExecutor:
 Executor = SimExecutor
 
 
+class CarrierSimExecutor(SimExecutor):
+    """Option 2b in simulation: carriers under the board move the pieces.
+
+    Plans must come from a Planner(max_moving=len(fleet.carriers)).
+    """
+
+    def __init__(self, lattice: Lattice, movers: dict[str, Mover], fleet, speed: float = 0.3,
+                 time_scale: float = 1.0, realtime: bool = True, spread: bool = True) -> None:
+        super().__init__(lattice, movers, speed, time_scale, realtime)
+        self.fleet = fleet
+        self.spread = spread
+
+    def prepare(self, plan: Plan) -> tuple[Plan, dict]:
+        sched = self.fleet.schedule(plan)
+        return sched.plan, {"carriers": sched.carrier_paths(self.lat, self.dt),
+                            "carrier_wait": sched.inserted_steps * self.dt}
+
+    async def execute(self, plan: Plan, world: World) -> float:
+        duration = await super().execute(plan, world)
+        if self.spread:
+            self.fleet.spread()
+        return duration
+
+    def carrier_positions(self) -> list[dict]:
+        return [{"id": c.id, "x": c.x, "y": c.y, "under": c.under} for c in self.fleet.carriers]
+
+
 @dataclass
 class Tolerances:
     tracking: float = 0.03  # max distance from the expected position while moving
@@ -138,6 +169,9 @@ class TrackingExecutor:
         self.poll = poll
         self.start_delay = start_delay
         self.time_scale = 1.0
+
+    def prepare(self, plan: Plan) -> tuple[Plan, dict]:
+        return plan, {}
 
     async def execute(self, plan: Plan, world: World) -> float:
         lat = self.lat

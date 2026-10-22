@@ -105,7 +105,8 @@ class GameService:
                 "game_over": b.is_game_over(), "result": b.result() if b.is_game_over() else None,
                 "engine": self.engine.describe() if self.engine else None,
                 "fault": self.fault, "discrepancies": self.discrepancies() if self.fault else [],
-                "layout": self._layout(), "pieces": pieces}
+                "layout": self._layout(), "pieces": pieces,
+                "carriers": getattr(self.executor, "carrier_positions", list)()}
 
     def _layout(self) -> dict[str, Any]:
         lay = self.world.layout
@@ -330,11 +331,12 @@ class GameService:
         pauses it is kept and run on a successful resume.
         """
         dt = self.executor.dt
+        plan, extra = self.executor.prepare(plan)
         duration = plan.steps * dt
         self._publish({"type": "plan", "label": label, "duration": duration,
                        "time_scale": self.executor.time_scale,
                        "paths": {pid: [[w.x, w.y, w.t] for w in waypoints(self.lat, tr, dt)]
-                                 for pid, tr in plan.trajectories.items()}})
+                                 for pid, tr in plan.trajectories.items()}, **extra})
         try:
             await self.executor.execute(plan, self.world)
         except ExecutionFault as fault:

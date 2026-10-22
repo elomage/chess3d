@@ -17,6 +17,23 @@ from ..world import World
 from .app import create_app
 
 
+def carrier_service(world: World, count: int, speed: float, time_scale: float) -> GameService:
+    from ..motion.carriers import CarrierFleet
+    from ..motion.executor import CarrierSimExecutor
+    from ..motion.lattice import Lattice
+    from ..motion.planner import Planner, step_seconds
+    from ..movers.base import Pose
+    from ..movers.sim import SimMover
+
+    lat = Lattice(world.layout)
+    movers = {p.id: SimMover(p.id, Pose(*map(float, lat.xy[lat.index(p.node)]), 0.0))
+              for p in world.pieces.values()}
+    fleet = CarrierFleet(lat, count, step_seconds(speed), speed=0.8)
+    fleet.spread()
+    executor = CarrierSimExecutor(lat, movers, fleet, speed, time_scale)
+    return GameService(planner=Planner(lat, max_moving=count), world=world, executor=executor)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
@@ -29,6 +46,8 @@ def main() -> None:
     ap.add_argument("--udp", type=int, metavar="PORT", help="drive mover firmware over UDP")
     ap.add_argument("--emulate", action="store_true", help="UDP stack against emulated feet")
     ap.add_argument("--noise", type=float, default=0.0, help="emulated pose noise (m)")
+    ap.add_argument("--carriers", type=int, default=0,
+                    help="simulate option 2b with this many carriers under the board")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +58,9 @@ def main() -> None:
         hw = Hardware(world, port=args.udp or 0, speed=args.speed,
                       emulate=args.emulate, noise=args.noise)
         app = create_app(engine=player, hardware=hw)
+    elif args.carriers:
+        service = carrier_service(world, args.carriers, args.speed, args.time_scale)
+        app = create_app(service, engine=player)
     else:
         service = GameService(speed=args.speed, time_scale=args.time_scale, world=world)
         app = create_app(service, engine=player)

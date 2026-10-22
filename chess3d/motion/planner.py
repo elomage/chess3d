@@ -81,9 +81,12 @@ class _Reservations:
 class Planner:
     def __init__(self, lattice: Lattice | None = None, horizon: int = 600,
                  max_expansions: int = 200_000, retries: int = 6, seed: int = 0,
-                 penalty: float = PENALTY) -> None:
+                 penalty: float = PENALTY, max_moving: int | None = None) -> None:
+        """`max_moving` caps how many pieces move at the same time, e.g. the
+        number of carriers under the board (option 2b)."""
         self.lat = lattice or Lattice()
         self.penalty = penalty
+        self.max_moving = max_moving
         self.horizon = horizon
         self.max_expansions = max_expansions
         self.retries = retries
@@ -283,6 +286,11 @@ class Planner:
         pos, radii = res.arrays(exclude=agent)
         need = radii + radius + CLEARANCE - 1e-9
         H = self.horizon
+        if self.max_moving is not None and len(radii):
+            moving = (pos[:, 1:] != pos[:, :-1]).any(axis=2).sum(axis=0)
+            saturated = moving >= self.max_moving  # index t: others moving t -> t+1
+        else:
+            saturated = None
 
         def safe_forever(n: int, t: int) -> bool:
             if not len(radii):
@@ -320,7 +328,10 @@ class Planner:
             expansions += 1
             if expansions > self.max_expansions or t >= H:
                 continue
-            succ = [n] + [m for m in lat.neighbors[n] if free[m]]
+            if saturated is not None and saturated[t]:
+                succ = [n]  # every carrier is busy: wait
+            else:
+                succ = [n] + [m for m in lat.neighbors[n] if free[m]]
             succ = [m for m in succ if (m, t + 1) not in closed and h[m] < np.iinfo(np.int32).max]
             if not succ:
                 continue

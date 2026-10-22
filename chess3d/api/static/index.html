@@ -183,6 +183,15 @@ function drawPiece(p, x, y) {
   ctx.fillText(GLYPH[p.kind], cx, cy + p.radius * 0.08 * scale);
 }
 
+function drawCarrier(x, y) {
+  const [cx, cy] = px(x, y), r = 0.07 * scale;
+  ctx.fillStyle = css("--accent") + "66";
+  ctx.strokeStyle = css("--accent");
+  ctx.lineWidth = 2;
+  ctx.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+  ctx.strokeRect(cx - r, cy - r, 2 * r, 2 * r);
+}
+
 function positionAt(path, t) {
   if (t <= path[0][2]) return path[0];
   for (let k = 1; k < path.length; k++) {
@@ -207,6 +216,13 @@ function frame(now) {
       let x = p.x, y = p.y;
       if (anim && anim.paths[p.id]) [x, y] = positionAt(anim.paths[p.id], t);
       drawPiece(p, x, y);
+    }
+    // Carriers are under the board; drawn on top, translucent, so they stay
+    // visible while engaged under a piece.
+    for (const c of state.carriers || []) {
+      let x = c.x, y = c.y;
+      if (anim && anim.carriers && anim.carriers[c.id]) [x, y] = positionAt(anim.carriers[c.id], t);
+      drawCarrier(x, y);
     }
   }
   requestAnimationFrame(frame);
@@ -251,7 +267,8 @@ function connect() {
     } else if (msg.type === "fault") {
       setStatus(`fault: ${msg.message}` + (msg.recovering ? " - recovering..." : ""), true);
     } else if (msg.type === "plan") {
-      anim = { paths: msg.paths, duration: msg.duration, timeScale: msg.time_scale, start: performance.now() };
+      anim = { paths: msg.paths, carriers: msg.carriers, duration: msg.duration,
+               timeScale: msg.time_scale, start: performance.now() };
     }
   };
   ws.onclose = () => { setStatus("disconnected, retrying...", true); setTimeout(connect, 1000); };

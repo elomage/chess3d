@@ -24,6 +24,7 @@ import chess.pgn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chess3d.chess_layer.bridge import ChessBridge  # noqa: E402
+from chess3d.motion.carriers import CarrierFleet  # noqa: E402
 from chess3d.motion.planner import PENALTY, Planner, PlanningError, step_seconds  # noqa: E402
 from chess3d.world import World  # noqa: E402
 
@@ -59,6 +60,11 @@ def main() -> int:
     ap.add_argument("--speed", type=float, default=0.3, help="top speed m/s")
     ap.add_argument("--target", type=float, default=15.0, help="move time target s")
     ap.add_argument("--penalty", type=float, default=PENALTY, help="blocker cost in lattice steps")
+    ap.add_argument("--carriers", type=int, default=0,
+                    help="option 2b: number of carriers under the board (0 = self-propelled)")
+    ap.add_argument("--carrier-speed", type=float, default=0.4, help="empty carrier speed m/s")
+    ap.add_argument("--idle", choices=["stay", "spread"], default="stay",
+                    help="where idle carriers wait between moves")
     ap.add_argument("--verify", action="store_true", help="collision-check every plan")
     args = ap.parse_args()
 
@@ -70,19 +76,29 @@ def main() -> int:
     if not games:
         ap.error("give a PGN file and/or --random N")
 
-    planner = Planner(penalty=args.penalty)
+    planner = Planner(penalty=args.penalty, max_moving=args.carriers or None)
     dt = step_seconds(args.speed)
+    waited, empty = 0, 0.0
     times, blockers, peaks, failures, violations = [], [], [], 0, 0
     worst: tuple[float, str] = (0.0, "")
     t_start = time.time()
     for name, moves in games:
         world = World.initial()
         bridge = ChessBridge(world)
+        fleet = (CarrierFleet(planner.lat, args.carriers, dt, args.carrier_speed)
+                 if args.carriers else None)
         for ply, move in enumerate(moves):
             san = bridge.board.san(move)
             tasks = bridge.tasks(move)
             try:
                 plan = planner.plan_sequence(world, [(t.piece_id, t.goal) for t in tasks])
+                if fleet:
+                    sched = fleet.schedule(plan)
+                    plan = sched.plan
+                    waited += sched.inserted_steps
+                    empty += sched.empty_distance
+                    if args.idle == "spread":
+                        fleet.spread()
                 if args.verify:
                     violations += len(planner.verify(world, plan))
                 planner.apply(world, plan)
@@ -111,6 +127,9 @@ def main() -> int:
         print(f"concurrent peak per move: max {max(peaks)}, "
               f"p95 {sorted(peaks)[int(0.95 * (len(peaks) - 1))]}")
         print(f"target {args.target:.0f}s at p95: {'PASS' if p95 < args.target and not failures else 'FAIL'}")
+    if args.carriers and times:
+        print(f"carriers {args.carriers}: waiting for carriers {waited * dt / len(times):.1f}s per move, "
+              f"empty travel {empty / len(times):.2f}m per move")
     if args.verify:
         print(f"collision violations: {violations}")
     return 0 if times and p95 < args.target and not failures and not violations else 1
