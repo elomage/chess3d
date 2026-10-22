@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .geometry import FOOTPRINTS, Kind, parking_nodes, square_node
+from .geometry import FOOTPRINTS, FULL, RIG, Kind, Layout, square_node
 
 Node = tuple[int, int]
 
@@ -31,9 +31,10 @@ class Piece:
 
 
 class World:
-    def __init__(self) -> None:
+    def __init__(self, layout: Layout = FULL) -> None:
+        self.layout = layout
         self.pieces: dict[str, Piece] = {}
-        self.slots: list[Node] = parking_nodes()
+        self.slots: list[Node] = list(layout.slots)
 
     @classmethod
     def initial(cls) -> "World":
@@ -55,8 +56,21 @@ class World:
     def add(self, piece: Piece) -> None:
         self.pieces[piece.id] = piece
 
+    @classmethod
+    def rig(cls) -> "World":
+        """Six pieces of mixed sizes on the a1-d4 test rig."""
+        w = cls(RIG)
+        for pid, kind, white, sq in (("wRa1", Kind.ROOK, True, (0, 0)),
+                                     ("wNb1", Kind.KNIGHT, True, (1, 0)),
+                                     ("wKe1", Kind.KING, True, (2, 0)),
+                                     ("wPa2", Kind.PAWN, True, (0, 1)),
+                                     ("wPb2", Kind.PAWN, True, (1, 1)),
+                                     ("bQd8", Kind.QUEEN, False, (3, 3))):
+            w.add(Piece(pid, kind, white, square_node(*sq)))
+        return w
+
     def copy(self) -> "World":
-        w = World()
+        w = World(self.layout)
         for p in self.pieces.values():
             w.add(Piece(p.id, p.kind, p.white, p.node))
         return w

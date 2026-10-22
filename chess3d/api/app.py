@@ -52,6 +52,10 @@ class GotoIn(BaseModel):
     square: str
 
 
+class ResumeIn(BaseModel):
+    adopt: bool = False
+
+
 class ChoreoStep(BaseModel):
     piece: str
     square: str
@@ -61,15 +65,21 @@ class ChoreoIn(BaseModel):
     steps: list[ChoreoStep]
 
 
-def create_app(service: GameService | None = None, engine: EnginePlayer | None = None) -> FastAPI:
-    svc = service or GameService()
+def create_app(service: GameService | None = None, engine: EnginePlayer | None = None,
+               hardware=None) -> FastAPI:
+    """`hardware` is a chess3d.hardware.Hardware whose service is used."""
+    svc = hardware.service if hardware else service or GameService()
     links: list[LichessLink] = []
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if hardware:
+            await hardware.start()
         if engine:
             asyncio.create_task(svc.set_engine(engine))
         yield
+        if hardware:
+            await hardware.close()
         for link in links:
             await link.stop()
         await svc.set_engine(None)
@@ -137,6 +147,14 @@ def create_app(service: GameService | None = None, engine: EnginePlayer | None =
     @app.post("/reset")
     async def reset():
         return await call(svc.reset())
+
+    @app.post("/resume")
+    async def resume(body: ResumeIn):
+        return await call(svc.resume(body.adopt))
+
+    @app.get("/discrepancies")
+    async def discrepancies():
+        return {"discrepancies": svc.discrepancies()}
 
     @app.post("/pieces/{piece_id}/goto")
     async def goto(piece_id: str, body: GotoIn):

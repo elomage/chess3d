@@ -12,21 +12,23 @@ from collections import deque
 
 import numpy as np
 
-from ..geometry import AREA_DEPTH, AREA_WIDTH, CENTER_INSET, CLEARANCE, GRID
+from ..geometry import CENTER_INSET, CLEARANCE, FULL, GRID, Layout
 
 STEPS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
 class Lattice:
-    def __init__(self) -> None:
-        self.nx = round(AREA_WIDTH / GRID) + 1
-        self.ny = round(AREA_DEPTH / GRID) + 1
+    def __init__(self, layout: Layout = FULL) -> None:
+        self.layout = layout
+        width, depth = layout.width, layout.depth
+        self.nx = round(width / GRID) + 1
+        self.ny = round(depth / GRID) + 1
         ii, jj = np.meshgrid(np.arange(self.nx), np.arange(self.ny), indexing="ij")
         self.xy = np.stack([ii.ravel() * GRID, jj.ravel() * GRID], axis=1)
         x, y = self.xy[:, 0], self.xy[:, 1]
         eps = 1e-9
-        self.valid = ((x >= CENTER_INSET - eps) & (x <= AREA_WIDTH - CENTER_INSET + eps)
-                      & (y >= CENTER_INSET - eps) & (y <= AREA_DEPTH - CENTER_INSET + eps))
+        self.valid = ((x >= CENTER_INSET - eps) & (x <= width - CENTER_INSET + eps)
+                      & (y >= CENTER_INSET - eps) & (y <= depth - CENTER_INSET + eps))
         self.size = self.nx * self.ny
         self.neighbors: list[list[int]] = [[] for _ in range(self.size)]
         for n in range(self.size):

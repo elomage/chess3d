@@ -73,6 +73,16 @@ def node_xy(i: int, j: int) -> tuple[float, float]:
     return (i * GRID, j * GRID)
 
 
+@dataclass(frozen=True)
+class Layout:
+    """Movable area (from the origin) and its parking slots."""
+    name: str
+    width: float
+    depth: float
+    slots: tuple[tuple[int, int], ...]
+    squares: int = 8  # board squares per side present in this layout
+
+
 def parking_nodes() -> list[tuple[int, int]]:
     """Parking slots in fill order: far column first, then towards the board.
 
@@ -85,3 +95,16 @@ def parking_nodes() -> list[tuple[int, int]]:
         for row in range(PARKING_ROWS):
             slots.append((i, NODES_PER_SQUARE * (row + 1)))
     return slots
+
+
+FULL = Layout("full", AREA_WIDTH, AREA_DEPTH, tuple(parking_nodes()))
+
+# Test rig: squares a1-d4 with the border on two sides, plus one column of
+# four parking slots beside it.
+RIG_SQUARES = 4
+_rig_board = BORDER + RIG_SQUARES * SQUARE
+RIG = Layout(
+    "rig", _rig_board + 0.5, BORDER + RIG_SQUARES * SQUARE,
+    tuple((round(_rig_board / GRID) + NODES_PER_SQUARE // 2, NODES_PER_SQUARE * (r + 1))
+          for r in range(RIG_SQUARES)),
+    RIG_SQUARES)

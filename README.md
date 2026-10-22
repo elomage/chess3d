@@ -44,6 +44,26 @@ Motion layer (free motion detaches the game until `/reset` or `/game/new`):
 `/ws` streams `state` snapshots and `plan` events with timed waypoints.
 Piece ids name the start square, e.g. `wNg1`, `bPe7`, `wQspare1`.
 
+## Hardware
+
+    .venv/bin/python -m chess3d.api --udp 4210            # real feet on Wi-Fi UDP
+    .venv/bin/python -m chess3d.api --rig --emulate       # a1-d4 rig, emulated feet
+
+Feet bind to pieces by the NFC tag in the piece body. The tracking executor
+stops all pieces when one leaves its path, falls behind, stops early or goes
+silent. The service then snaps to the sensed poses, drives the pieces back
+onto the lattice and re-plans. If that fails it pauses: `GET /discrepancies`
+lists what is out of place, and `POST /resume` continues once a human has
+fixed the board (`{"adopt": true}` retries from the sensed positions).
+
+Rig endurance test (the plan's 500-move cycle), against emulated feet with
+injected faults or against real ones:
+
+    .venv/bin/python tools/rig_cycle.py --emulate --moves 100 --slip-rate 0.1
+    .venv/bin/python tools/rig_cycle.py --udp 4210 --moves 500
+
+Firmware for the foot is in `firmware/mover` (see its README).
+
 ## Benchmark and tests
 
     .venv/bin/python tools/benchmark.py data/sample.pgn --random 10 --verify

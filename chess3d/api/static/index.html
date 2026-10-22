@@ -28,6 +28,8 @@
   .row input { flex: 1; min-width: 0; }
   #status { min-height: 1.4em; }
   #status.error { color: var(--error); }
+  .error-text { color: var(--error); }
+  #fault-list { margin: 8px 0; padding-left: 18px; }
   #history { font-family: ui-monospace, monospace; max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
@@ -39,6 +41,15 @@
       <h2>Game</h2>
       <div id="turn"></div>
       <div id="status"></div>
+    </section>
+    <section id="fault-box" hidden>
+      <h2>Paused after a fault</h2>
+      <div id="fault-msg" class="error-text"></div>
+      <ul id="fault-list"></ul>
+      <div class="row">
+        <button class="primary" id="resume">Pieces restored, resume</button>
+        <button id="adopt">Retry from sensed positions</button>
+      </div>
     </section>
     <section>
       <h2>Move</h2>
@@ -77,10 +88,22 @@
   </aside>
 </main>
 <script>
-const W = 4.5, H = 3.0, SQ = 3.0 / 9, BORDER = SQ / 2;
+const SQ = 3.0 / 9, BORDER = SQ / 2;
+let W = 4.5, H = 3.0, N = 8, SLOTS = [];
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
-const scale = canvas.width / W;
+let scale = canvas.width / W;
+
+function useLayout(layout) {
+  if (!layout || (layout.width === W && layout.depth === H && layout.squares === N)) {
+    if (layout) SLOTS = layout.slots;
+    return;
+  }
+  W = layout.width; H = layout.depth; N = layout.squares; SLOTS = layout.slots;
+  canvas.width = 1350;
+  canvas.height = Math.round(1350 * H / W);
+  scale = canvas.width / W;
+}
 let state = null, anim = null, selected = null;
 
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -117,8 +140,9 @@ function drawBoard() {
   ctx.fillStyle = css("--park");
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = css("--border");
-  ctx.fillRect(0, 0, 3.0 * scale, H * scale);
-  for (let f = 0; f < 8; f++) for (let r = 0; r < 8; r++) {
+  const boardW = Math.min(W, BORDER + N * SQ + (N === 8 ? BORDER : 0));
+  ctx.fillRect(0, 0, boardW * scale, H * scale);
+  for (let f = 0; f < N; f++) for (let r = 0; r < N; r++) {
     ctx.fillStyle = (f + r) % 2 ? css("--light") : css("--dark");
     const [x, y] = px(BORDER + f * SQ, BORDER + (r + 1) * SQ);
     ctx.fillRect(x, y, SQ * scale, SQ * scale);
@@ -126,18 +150,18 @@ function drawBoard() {
   ctx.fillStyle = css("--muted");
   ctx.font = `${0.06 * scale}px system-ui`;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  for (let f = 0; f < 8; f++) {
+  for (let f = 0; f < N; f++) {
     const [x, y] = px(BORDER + (f + 0.5) * SQ, BORDER / 2);
     ctx.fillText("abcdefgh"[f], x, y);
   }
-  for (let r = 0; r < 8; r++) {
+  for (let r = 0; r < N; r++) {
     const [x, y] = px(BORDER / 2, BORDER + (r + 0.5) * SQ);
     ctx.fillText(r + 1, x, y);
   }
   ctx.strokeStyle = css("--muted");
   ctx.setLineDash([6, 6]);
-  for (let c = 0; c < 4; c++) for (let r = 0; r < 8; r++) {
-    const [x, y] = px(3.0 + SQ / 2 + c * SQ, (r + 1) * SQ);
+  for (const [sx, sy] of SLOTS) {
+    const [x, y] = px(sx, sy);
     ctx.beginPath(); ctx.arc(x, y, 0.12 * scale, 0, 2 * Math.PI); ctx.stroke();
   }
   ctx.setLineDash([]);
@@ -188,7 +212,24 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+function renderFault() {
+  const box = document.getElementById("fault-box");
+  box.hidden = !state.fault;
+  if (!state.fault) return;
+  document.getElementById("fault-msg").textContent =
+    state.fault.message + (state.fault.recovery ? ` - recovery: ${state.fault.recovery}` : "");
+  const list = document.getElementById("fault-list");
+  list.replaceChildren(...state.discrepancies.map(d => {
+    const li = document.createElement("li");
+    li.textContent = d.problem === "missing"
+      ? `${d.piece}: no position report`
+      : `${d.piece}: ${(d.error * 100).toFixed(1)}cm from where it should be`;
+    return li;
+  }));
+}
+
 function render() {
+  renderFault();
   document.getElementById("turn").textContent = state.game_over
     ? `Game over: ${state.result}`
     : `${state.turn} to move${state.synced ? "" : " (board detached: reset or new game)"}`
@@ -206,7 +247,9 @@ function connect() {
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") {
-      state = msg; anim = null; render();
+      state = msg; anim = null; useLayout(msg.layout); render();
+    } else if (msg.type === "fault") {
+      setStatus(`fault: ${msg.message}` + (msg.recovering ? " - recovering..." : ""), true);
     } else if (msg.type === "plan") {
       anim = { paths: msg.paths, duration: msg.duration, timeScale: msg.time_scale, start: performance.now() };
     }
@@ -216,7 +259,7 @@ function connect() {
 
 function squareAt(x, y) {
   const f = Math.floor((x - BORDER) / SQ), r = Math.floor((y - BORDER) / SQ);
-  return f >= 0 && f < 8 && r >= 0 && r < 8 ? "abcdefgh"[f] + (r + 1) : null;
+  return f >= 0 && f < N && r >= 0 && r < N ? "abcdefgh"[f] + (r + 1) : null;
 }
 
 canvas.addEventListener("click", ev => {
@@ -230,6 +273,11 @@ canvas.addEventListener("click", ev => {
     const from = state.pieces.find(p => p.id === selected);
     const fromSq = squareAt(from.x, from.y);
     selected = null;
+    if (!state.synced && fromSq !== sq) {
+      // No game in progress (rig, demo): move the piece freely.
+      run(`${from.id} to ${sq}`, api(`/pieces/${from.id}/goto`, { square: sq }));
+      return;
+    }
     if (fromSq && fromSq !== sq) {
       let uci = fromSq + sq;
       if (from.kind === "P" && (sq[1] === "8" || sq[1] === "1")) uci += "q";
@@ -237,7 +285,7 @@ canvas.addEventListener("click", ev => {
       return;
     }
   }
-  selected = hit && !hit.parked ? hit.id : null;
+  selected = hit && (!hit.parked || !state.synced) ? hit.id : null;
 });
 
 function sendMove() {
@@ -259,6 +307,16 @@ document.getElementById("engine-on").onclick = () => run("engine", api("/game/en
   path: document.getElementById("engine-path").value,
   side: document.getElementById("engine-side").value,
 }));
+async function resume(adopt) {
+  try {
+    const r = await api("/resume", { adopt });
+    setStatus(r.resumed ? "resumed" : `still ${r.discrepancies.length} piece(s) out of place`, !r.resumed);
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+}
+document.getElementById("resume").onclick = () => resume(false);
+document.getElementById("adopt").onclick = () => resume(true);
 document.getElementById("engine-off").onclick = () => run("engine off", api("/game/engine", undefined, "DELETE"));
 
 connect();

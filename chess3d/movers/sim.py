@@ -12,7 +12,8 @@ class SimMover:
         self._path: list[Waypoint] = []
         self._state = MoverState.IDLE
 
-    def follow_path(self, waypoints: list[Waypoint]) -> None:
+    def follow_path(self, waypoints: list[Waypoint], heading: float = 0.0,
+                    start_ms: int = 0) -> None:
         self._path = list(waypoints)
         self._state = MoverState.MOVING if waypoints else MoverState.IDLE
 
@@ -27,6 +28,10 @@ class SimMover:
 
     def dock(self) -> None:
         self._state = MoverState.DOCKED
+
+    def stop(self) -> None:
+        self._path = []
+        self._state = MoverState.IDLE
 
     def advance(self, t: float) -> None:
         """Move to the interpolated position at plan time `t`."""

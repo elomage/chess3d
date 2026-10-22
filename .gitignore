@@ -1,5 +1,23 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-.pytest_cache/
 *.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PlatformIO / firmware
+.pio/
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+firmware/mover/include/config_local.h
+firmware/mover/test/host/t
+*.o
+
+# OS and editors
+.DS_Store
+*.swp

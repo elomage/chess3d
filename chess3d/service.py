@@ -4,6 +4,10 @@ Owns the physical world, the chess bridge, the planner and the movers. All
 commands are serialised through one lock, so only one plan runs at a time.
 Every change is published as an event to subscribers (WebSocket clients,
 integrations).
+
+Faults during execution are handled in two stages: first the service snaps
+the world to the sensed poses and re-plans to the intended end state. If that
+fails too it pauses; a human fixes the board and calls resume().
 """
 
 from __future__ import annotations
@@ -17,9 +21,11 @@ import chess
 
 from .chess_layer.bridge import KIND_OF, ChessBridge, node_of
 from .geometry import FOOTPRINTS
-from .motion.executor import Executor, waypoints
+from .localisation.reconcile import MoverPoses, reconcile, snap
+from .motion.executor import ExecutionFault, SimExecutor, waypoints
+from .motion.lattice import Lattice
 from .motion.planner import Plan, Planner, PlanningError
-from .movers.base import Mover, Pose
+from .movers.base import Pose
 from .movers.sim import SimMover
 from .world import Node, World
 
@@ -30,23 +36,40 @@ class ServiceError(RuntimeError):
     """A command that cannot be carried out in the current state."""
 
 
+class Paused(ServiceError):
+    """Execution failed and automatic recovery did not help."""
+
+
 class GameService:
     def __init__(self, planner: Planner | None = None, speed: float = 0.3,
                  time_scale: float = 1.0, realtime: bool = True,
-                 movers: dict[str, Mover] | None = None) -> None:
-        self.planner = planner or Planner()
+                 world: World | None = None, executor=None) -> None:
+        """`executor` defaults to a SimExecutor with one SimMover per piece;
+        pass a TrackingExecutor over RemoteMovers for hardware."""
+        self.world = world or World.initial()
+        self.planner = planner or Planner(Lattice(self.world.layout))
         self.lat = self.planner.lat
-        self.world = World.initial()
+        if self.lat.layout != self.world.layout:
+            raise ValueError("planner lattice and world use different layouts")
         self.home = {p.id: p.node for p in self.world.pieces.values()}
-        self.movers: dict[str, Mover] = movers or {
-            p.id: SimMover(p.id, Pose(*map(float, self.lat.xy[self.lat.index(p.node)]), 0.0))
-            for p in self.world.pieces.values()}
-        self.executor = Executor(self.lat, self.movers, speed)
-        self.time_scale = time_scale
-        self.realtime = realtime
-        self.bridge = ChessBridge(self.world)
-        self.synced = True
+        if executor is None:
+            movers = {p.id: SimMover(p.id, Pose(*map(float, self.lat.xy[self.lat.index(p.node)]), 0.0))
+                      for p in self.world.pieces.values()}
+            executor = SimExecutor(self.lat, movers, speed, time_scale, realtime)
+        self.executor = executor
+        self.movers = executor.movers
+        try:
+            self.bridge = ChessBridge(self.world)
+            self.synced = True
+        except KeyError:
+            # Not a full set (e.g. the test rig): motion layer only.
+            self.bridge = ChessBridge(self.world, chess.Board(None))
+            self.synced = False
         self.history: list[str] = []
+        self.fault: dict[str, Any] | None = None
+        self._fault_targets: dict[str, Node] = {}
+        self._pending: Callable[[], None] | None = None
+        self._recovering = False
         self.lock = asyncio.Lock()
         self.queues: set[asyncio.Queue] = set()
         self.move_hooks: list[MoveHook] = []
@@ -81,7 +104,16 @@ class GameService:
                 "synced": self.synced, "history": list(self.history),
                 "game_over": b.is_game_over(), "result": b.result() if b.is_game_over() else None,
                 "engine": self.engine.describe() if self.engine else None,
-                "pieces": pieces}
+                "fault": self.fault, "discrepancies": self.discrepancies() if self.fault else [],
+                "layout": self._layout(), "pieces": pieces}
+
+    def _layout(self) -> dict[str, Any]:
+        lay = self.world.layout
+        return {"name": lay.name, "width": lay.width, "depth": lay.depth, "squares": lay.squares,
+                "slots": [list(map(float, self.lat.xy[self.lat.index(n)])) for n in lay.slots]}
+
+    def discrepancies(self) -> list[dict[str, Any]]:
+        return [d.as_dict() for d in reconcile(self.world, self.lat, MoverPoses(self.movers))]
 
     # -- chess layer ------------------------------------------------------
 
@@ -100,6 +132,7 @@ class GameService:
 
     async def move(self, text: str | chess.Move, origin: str = "api") -> dict[str, Any]:
         async with self.lock:
+            self._ready()
             if not self.synced:
                 raise ServiceError("pieces were moved freely; start a new game or reset first")
             move = text if isinstance(text, chess.Move) else self.parse_move(text)
@@ -108,9 +141,13 @@ class GameService:
             san = self.bridge.board.san(move)
             tasks = self.bridge.tasks(move)
             plan = await self._plan([(t.piece_id, t.goal) for t in tasks])
-            seconds = await self._execute(plan, f"{san}")
-            self.bridge.commit(move, tasks)
-            self.history.append(san)
+
+            def finish() -> None:
+                self.bridge.commit(move, tasks)
+                self.history.append(san)
+
+            seconds = await self._execute(plan, san, finish)
+            finish()
             self._publish(self.snapshot())
         for hook in self.move_hooks:
             await hook(move, origin)
@@ -125,11 +162,21 @@ class GameService:
         except ValueError as e:
             raise ServiceError(f"bad FEN: {e}") from e
         async with self.lock:
+            self._ready()
             targets = self._assign(board)
-            seconds = await self._arrange(targets)
-            self.bridge = ChessBridge(self.world, board)
-            self.synced = True
-            self.history = []
+
+            def finish() -> None:
+                self.bridge = ChessBridge(self.world, board)
+                self.synced = True
+                self.history = []
+
+            try:
+                seconds = await self._arrange(targets)
+            except Paused:
+                # The set-up is incomplete; start the new game again after resuming.
+                self.synced = False
+                raise
+            finish()
             self._publish(self.snapshot())
         await self._engine_turn()
         return {"fen": board.fen(), "seconds": seconds}
@@ -161,13 +208,89 @@ class GameService:
     async def _free_move(self, piece_id: str, node: Node, label: str) -> dict[str, Any]:
         self._piece(piece_id)
         async with self.lock:
+            self._ready()
             if any(p.node == node for p in self.world.pieces.values() if p.id != piece_id):
                 raise ServiceError("target is occupied")
             plan = await self._plan([(piece_id, node)])
-            seconds = await self._execute(plan, label)
-            self.synced = False
+
+            def finish() -> None:
+                self.synced = False
+
+            seconds = await self._execute(plan, label, finish)
+            finish()
             self._publish(self.snapshot())
         return {"seconds": seconds, "blockers": plan.blockers}
+
+    def _ready(self) -> None:
+        if self.fault:
+            raise Paused(f"paused after a fault: {self.fault['message']}; fix the board and resume")
+
+    # -- faults -----------------------------------------------------------
+
+    async def resume(self, adopt: bool = False) -> dict[str, Any]:
+        """Continue after a pause.
+
+        Without `adopt` the pieces must stand where the paused state expects
+        them (a human put them back); otherwise the discrepancies are
+        returned. With `adopt` the sensed positions are taken as they are and
+        the service tries again to bring the pieces to the expected state.
+        """
+        async with self.lock:
+            if not self.fault:
+                return {"resumed": True, "discrepancies": []}
+            if adopt:
+                try:
+                    self._recovering = True
+                    self._adopt_sensed()
+                    await self.executor.settle(self.world)
+                    await self._arrange(self._fault_targets)
+                except (ExecutionFault, ServiceError) as e:
+                    for pid, node in self._fault_targets.items():
+                        self.world.pieces[pid].node = node
+                    self.fault["recovery"] = str(e)
+                    self._publish(self.snapshot())
+                    return {"resumed": False, "discrepancies": self.discrepancies()}
+                finally:
+                    self._recovering = False
+            left = self.discrepancies()
+            if left:
+                self._publish(self.snapshot())
+                return {"resumed": False, "discrepancies": left}
+            self.fault = None
+            pending, self._pending = self._pending, None
+            if pending:
+                pending()
+            self._publish(self.snapshot())
+        await self._engine_turn()
+        return {"resumed": True, "discrepancies": []}
+
+    def _adopt_sensed(self) -> None:
+        for pid, pose in MoverPoses(self.movers).poses().items():
+            if pose is not None and pid in self.world.pieces:
+                self.world.pieces[pid].node = snap(self.lat, pose)
+
+    async def _recover(self, plan: Plan, fault: ExecutionFault, finish) -> float:
+        """Snap to the sensed state and re-plan to the plan's intended end."""
+        intended = {pid: self.lat.node(tr[-1]) for pid, tr in plan.trajectories.items()}
+        targets = {pid: intended.get(pid, p.node) for pid, p in self.world.pieces.items()}
+        self._recovering = True
+        try:
+            if any(pose is None for pose in MoverPoses(self.movers).poses().values()):
+                raise ServiceError("a mover is not reporting its position")
+            self._adopt_sensed()
+            await self.executor.settle(self.world)
+            return await self._arrange(targets)
+        except (ExecutionFault, ServiceError) as e:
+            # Show the state the board should be in, so a human can restore it.
+            for pid, node in targets.items():
+                self.world.pieces[pid].node = node
+            self.fault = {**fault.as_dict(), "recovery": str(e)}
+            self._fault_targets = targets
+            self._pending = finish
+            self._publish(self.snapshot())
+            raise Paused(f"{fault}; automatic recovery failed: {e}") from e
+        finally:
+            self._recovering = False
 
     def _piece(self, piece_id: str) -> None:
         if piece_id not in self.world.pieces:
@@ -200,16 +323,25 @@ class GameService:
         except PlanningError as e:
             raise ServiceError(f"no motion plan: {e}") from e
 
-    async def _execute(self, plan: Plan, label: str) -> float:
+    async def _execute(self, plan: Plan, label: str, finish=None) -> float:
+        """Run a plan; on a fault try to recover, else pause.
+
+        `finish` is what the caller does after success; when the service
+        pauses it is kept and run on a successful resume.
+        """
         dt = self.executor.dt
         duration = plan.steps * dt
         self._publish({"type": "plan", "label": label, "duration": duration,
-                       "time_scale": self.time_scale,
+                       "time_scale": self.executor.time_scale,
                        "paths": {pid: [[w.x, w.y, w.t] for w in waypoints(self.lat, tr, dt)]
                                  for pid, tr in plan.trajectories.items()}})
-        if self.realtime and duration:
-            await asyncio.sleep(duration / self.time_scale)
-        self.executor.run(plan, self.world)
+        try:
+            await self.executor.execute(plan, self.world)
+        except ExecutionFault as fault:
+            self._publish({"type": "fault", **fault.as_dict(), "recovering": not self._recovering})
+            if self._recovering:
+                raise
+            duration += await self._recover(plan, fault, finish)
         self._publish(self.snapshot())
         return duration
 
@@ -252,7 +384,7 @@ class GameService:
                 targets[p.id] = free_slots.pop(0)
         return targets
 
-    async def _arrange(self, targets: dict[str, Node]) -> float:
+    async def _arrange(self, targets: dict[str, Node], finish=None) -> float:
         """Bring every piece to its target, displacing occupants when needed."""
         total = 0.0
         for _ in range(4 * len(targets)):
@@ -266,7 +398,7 @@ class GameService:
                     plan = await self._plan([(pid, targets[pid]) for pid in ready])
                 except ServiceError:
                     plan = await self._plan([(ready[0], targets[ready[0]])])
-                total += await self._execute(plan, "arrange")
+                total += await self._execute(plan, "arrange", finish)
                 continue
             # Every pending target is taken: move one occupant to a spare slot.
             blocked = occupant[targets[pending[0]]]
@@ -275,5 +407,5 @@ class GameService:
             if not spare:
                 spare = [s for s in self.world.slots if s not in occupant]
             plan = await self._plan([(blocked, spare[0])])
-            total += await self._execute(plan, "arrange")
+            total += await self._execute(plan, "arrange", finish)
         raise ServiceError("could not arrange the pieces")
