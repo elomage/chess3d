@@ -60,8 +60,12 @@ FOOTPRINTS: dict[Kind, Footprint] = {
     Kind.KING: Footprint(0.70 * SQUARE, 1.67 * SQUARE),
 }
 
-PARKING_COLUMNS = 4
+# 40 slots: the 36 bodies and 4 spare feet all charge at once. Columns sit
+# 5 lattice steps apart (278mm), the closest to 300mm on the lattice; rows
+# keep the square pitch.
+PARKING_COLUMNS = 5
 PARKING_ROWS = 8
+PARKING_COLUMN_STEP = 5
 
 
 def square_node(file: int, rank: int) -> tuple[int, int]:
@@ -86,12 +90,13 @@ class Layout:
 def parking_nodes() -> list[tuple[int, int]]:
     """Parking slots in fill order: far column first, then towards the board.
 
-    Slots use the same pitch as the board squares so that any piece fits.
+    Rows use the square pitch; columns are PARKING_COLUMN_STEP nodes apart,
+    which still leaves 45mm between two kings.
     """
     board_nodes = round(BOARD_SIZE / GRID)
     slots = []
     for col in reversed(range(PARKING_COLUMNS)):
-        i = board_nodes + NODES_PER_SQUARE // 2 + NODES_PER_SQUARE * col
+        i = board_nodes + NODES_PER_SQUARE // 2 + PARKING_COLUMN_STEP * col
         for row in range(PARKING_ROWS):
             slots.append((i, NODES_PER_SQUARE * (row + 1)))
     return slots

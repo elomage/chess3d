@@ -138,7 +138,7 @@ void loop() {
   estimator.update(dt);
   float vx, vy, wz;
   follower.update(estimator.pose(), vx, vy, wz);
-  driveMecanum(vx, vy, wz);
+  driveOmni(vx, vy, wz);
 
   State s = currentState();
   float hz = s == State::Moving ? STATUS_HZ_MOVING : STATUS_HZ_IDLE;
@@ -147,7 +147,7 @@ void loop() {
     sendStatus();
   }
   if (WiFi.status() != WL_CONNECTED) {
-    driveMecanum(0, 0, 0);  // never drive blind
+    driveOmni(0, 0, 0);  // never drive blind
     follower.stop();
   }
 }

@@ -21,3 +21,6 @@ firmware/mover/test/host/t
 # OS and editors
 .DS_Store
 *.swp
+
+# CAD build output
+cad/out/

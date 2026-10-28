@@ -8,7 +8,9 @@
 namespace hal {
 
 struct WheelSpeeds {
-  float fl, fr, rl, rr;  // rad/s, positive drives the foot forwards
+  // rad/s per wheel, in WHEEL_ANGLE order; positive turns the foot
+  // anticlockwise seen from above
+  float w[3];
 };
 
 struct ImuSample {

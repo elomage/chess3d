@@ -7,7 +7,7 @@
 
 namespace hal {
 
-static WheelSpeeds g_cmd{0, 0, 0, 0};
+static WheelSpeeds g_cmd{};
 static float g_yaw = 0.0f;
 static uint32_t g_last_us = 0;
 

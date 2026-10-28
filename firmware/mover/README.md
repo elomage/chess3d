@@ -6,7 +6,7 @@ estimate and reports status at 10 Hz while moving, 2 Hz otherwise, and at
 once on every state change.
 
 - `src/main.cpp` - Wi-Fi, UDP, message handling, control loop
-- `src/motion.cpp` - pose estimator (mecanum odometry, IMU yaw, magnet grid
+- `src/motion.cpp` - pose estimator (omni-wheel odometry, IMU yaw, magnet grid
   fixes) and the timed path follower
 - `src/hal.cpp` - hardware layer; placeholder implementations until the PCB
   exists (commanded wheel speeds are echoed as measured)

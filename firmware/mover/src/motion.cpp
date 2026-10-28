@@ -24,12 +24,20 @@ static float wrapAngle(float a) {
 // -- Estimator --------------------------------------------------------------
 
 void Estimator::update(float dt) {
-  // Forward kinematics of the mecanum base: wheel speeds to body velocity.
+  // Forward kinematics of the omni base: wheel speeds to body velocity.
+  // Wheel i's rim speed is u = -sin(a) vx + cos(a) vy + rho wz; with the
+  // wheels 120 degrees apart this inverts exactly.
   hal::WheelSpeeds w = hal::wheelSpeeds();
-  float r = WHEEL_RADIUS, k = HALF_TRACK + HALF_WHEELBASE;
-  float bvx = r / 4 * (w.fl + w.fr + w.rl + w.rr);
-  float bvy = r / 4 * (-w.fl + w.fr + w.rl - w.rr);
-  float bwz = r / (4 * k) * (-w.fl + w.fr - w.rl + w.rr);
+  float su = 0, cu = 0, u_sum = 0;
+  for (int i = 0; i < WHEELS; i++) {
+    float u = WHEEL_RADIUS * w.w[i];
+    su += sinf(WHEEL_ANGLE[i]) * u;
+    cu += cosf(WHEEL_ANGLE[i]) * u;
+    u_sum += u;
+  }
+  float bvx = -2.0f / 3 * su;
+  float bvy = 2.0f / 3 * cu;
+  float bwz = u_sum / (3 * WHEEL_RHO);
 
   hal::ImuSample imu = hal::imu();
   if (imu.ok) {
@@ -141,7 +149,7 @@ bool Follower::update(const Pose& pose, float& vx, float& vy, float& wz) {
 
 // -- Drive ------------------------------------------------------------------
 
-void driveMecanum(float vx, float vy, float wz) {
+void driveOmni(float vx, float vy, float wz) {
   float v = sqrtf(vx * vx + vy * vy);
   if (v > MAX_SPEED) {
     vx *= MAX_SPEED / v;
@@ -149,11 +157,10 @@ void driveMecanum(float vx, float vy, float wz) {
   }
   // TODO: acceleration limiting against MAX_ACCEL (the planner's timing
   // already assumes gentle starts; the firmware must enforce it).
-  float k = HALF_TRACK + HALF_WHEELBASE, r = WHEEL_RADIUS;
   hal::WheelSpeeds w;
-  w.fl = (vx - vy - k * wz) / r;
-  w.fr = (vx + vy + k * wz) / r;
-  w.rl = (vx + vy - k * wz) / r;
-  w.rr = (vx - vy + k * wz) / r;
+  for (int i = 0; i < WHEELS; i++) {
+    float a = WHEEL_ANGLE[i];
+    w.w[i] = (-sinf(a) * vx + cosf(a) * vy + WHEEL_RHO * wz) / WHEEL_RADIUS;
+  }
   hal::setWheelSpeeds(w);
 }

@@ -1,4 +1,4 @@
-// Pose estimation and timed path following for a mecanum foot.
+// Pose estimation and timed path following for a three-wheel omni foot.
 #pragma once
 
 #include <stdint.h>
@@ -55,5 +55,5 @@ class Follower {
   const char* error_ = nullptr;
 };
 
-// Body-frame velocity to mecanum wheel speeds, with speed limiting.
-void driveMecanum(float vx, float vy, float wz);
+// Body-frame velocity to omni wheel speeds, with speed limiting.
+void driveOmni(float vx, float vy, float wz);

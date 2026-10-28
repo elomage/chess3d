@@ -24,10 +24,13 @@ constexpr float CONTROL_HZ = 200.0f;
 constexpr float STATUS_HZ_MOVING = 10.0f;
 constexpr float STATUS_HZ_IDLE = 2.0f;
 
-// Drive geometry (mecanum, metres).
+// Drive geometry: three omni wheels at 120 degrees (metres, radians). Wheel
+// angles run from the foot's forward axis towards its left; wheel 0 is
+// straight ahead. Matches cad/params.py.
 constexpr float WHEEL_RADIUS = 0.024f;
-constexpr float HALF_TRACK = 0.045f;      // centre to wheel, sideways
-constexpr float HALF_WHEELBASE = 0.045f;  // centre to wheel, forwards
+constexpr float WHEEL_RHO = 0.060f;  // centre to wheel contact
+constexpr int WHEELS = 3;
+constexpr float WHEEL_ANGLE[WHEELS] = {0.0f, 2.0943951f, 4.1887902f};
 constexpr float MAX_SPEED = 0.45f;        // m/s
 constexpr float MAX_ACCEL = 0.8f;         // m/s^2, keeps a 57cm king upright
 

@@ -1,4 +1,4 @@
-// Closed-loop host test: follower + mecanum kinematics + odometry.
+// Closed-loop host test: follower + omni kinematics + odometry.
 // Build and run (from this directory):
 //   g++ -std=gnu++17 -I. -I../../include test_follow.cpp ../../src/motion.cpp ../../src/hal.cpp -o t && ./t
 #include <stdio.h>
@@ -25,7 +25,7 @@ static int run(const char* name, Pose start, const Waypoint* wp, int n, float he
     est.update(dt);
     float vx, vy, wz;
     f.update(est.pose(), vx, vy, wz);
-    driveMecanum(vx, vy, wz);
+    driveOmni(vx, vy, wz);
     if (f.state() != State::Moving) break;  // progress() is 0 once idle
     const Pose& p = est.pose();
     float t = f.progress(), rx = wp[n - 1].x, ry = wp[n - 1].y;
@@ -51,8 +51,31 @@ static int run(const char* name, Pose start, const Waypoint* wp, int n, float he
   return bad;
 }
 
-int main() {
+// Wheel speeds from driveOmni, read back by the estimator, must give the
+// commanded body velocity. Heading starts at 0 (facing +y), so forwards is
+// +y and left is -x.
+static int kinematicsRoundTrip() {
+  const float cmds[][3] = {{0.3f, 0.0f, 0.0f}, {0.0f, 0.2f, 0.0f}, {0.0f, 0.0f, 1.0f},
+                           {0.2f, -0.15f, 0.7f}};
   int bad = 0;
+  for (const auto& c : cmds) {
+    Estimator est;
+    est.reset({0, 0, 0});
+    driveOmni(c[0], c[1], c[2]);
+    const float dt = 0.001f;
+    est.update(dt);
+    const Pose& p = est.pose();
+    float vx = p.y / dt, vy = -p.x / dt, wz = p.h / dt;
+    bool ok = fabsf(vx - c[0]) < 1e-3f && fabsf(vy - c[1]) < 1e-3f && fabsf(wz - c[2]) < 1e-3f;
+    printf("  cmd (%.2f, %.2f, %.2f) -> odometry (%.3f, %.3f, %.3f)\n", c[0], c[1], c[2], vx, vy, wz);
+    bad += check("  kinematics round trip", ok);
+  }
+  driveOmni(0, 0, 0);
+  return bad;
+}
+
+int main() {
+  int bad = kinematicsRoundTrip();
   Waypoint straight[] = {{0.333f, 0.333f, 0.0f}, {0.333f, 1.0f, 2.2f}};
   bad += run("straight up a file", {0.333f, 0.333f, 0.0f}, straight, 2, 0.0f);
   Waypoint lshape[] = {{0.667f, 0.333f, 0.0f}, {0.667f, 0.5f, 0.6f}, {0.5f, 0.667f, 1.4f},
